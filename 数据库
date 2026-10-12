@@ -1,0 +1,67 @@
+-- 创建数据库
+CREATE DATABASE IF NOT EXISTS training_platform DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE training_platform;
+
+-- 用户表 user
+CREATE TABLE `user` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+  `username` VARCHAR(50) NOT NULL UNIQUE COMMENT '账号',
+  `password` VARCHAR(100) NOT NULL COMMENT '密码',
+  `real_name` VARCHAR(50) COMMENT '真实姓名',
+  `role` VARCHAR(20) NOT NULL COMMENT '角色 student/teacher/admin',
+  `class_id` BIGINT NULL COMMENT '班级id',
+  `status` TINYINT NOT NULL DEFAULT 1 COMMENT '0禁用 1启用',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT DEFAULT 0 COMMENT '逻辑删除：0未删，1已删'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 班级表 class
+CREATE TABLE `class` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+  `class_name` VARCHAR(50) NOT NULL COMMENT '班级名称',
+  `teacher_id` BIGINT NULL COMMENT '负责教师id',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 实训任务表 training_task
+CREATE TABLE `training_task` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+  `task_name` VARCHAR(100) NOT NULL COMMENT '任务名称',
+  `task_desc` TEXT COMMENT '任务描述',
+  `class_id` BIGINT NOT NULL COMMENT '所属班级',
+  `total_score` INT COMMENT '总分',
+  `deadline` DATETIME COMMENT '截止时间',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'not_start' COMMENT 'not_start/ongoing/finished',
+  `create_user_id` BIGINT NOT NULL COMMENT '创建教师id',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 成果提交表 submission
+CREATE TABLE `submission` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+  `task_id` BIGINT NOT NULL COMMENT '任务id',
+  `student_id` BIGINT NOT NULL COMMENT '学生id',
+  `file_url` VARCHAR(255) COMMENT '提交文件地址',
+  `submit_time` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '提交时间',
+  `score` DECIMAL(5,2) NULL COMMENT '得分',
+  `comment` TEXT NULL COMMENT '教师评语',
+  `is_locked` TINYINT DEFAULT 0 COMMENT '0未锁定，1锁定（已打分不可修改）',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `is_deleted` TINYINT DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 消息表 message
+CREATE TABLE `message` (
+  `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` BIGINT NOT NULL COMMENT '接收人id',
+  `msg_title` VARCHAR(100) NOT NULL COMMENT '消息标题',
+  `msg_content` TEXT NOT NULL COMMENT '消息内容',
+  `is_read` TINYINT DEFAULT 0 COMMENT '0未读，1已读',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

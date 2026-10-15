@@ -101,21 +101,21 @@ public class UserRepository {
         return countBySql("SELECT COUNT(*) FROM " + TABLE + " WHERE role = ? AND is_deleted = 0", role);
     }
 
-    public long count(String username, Long classId) {
+    public long count(String username, String role, Long classId, Integer status) {
         List<Object> args = new ArrayList<>();
-        String sql = "SELECT COUNT(*) FROM " + TABLE + " u" + whereClause(username, classId, args);
+        String sql = "SELECT COUNT(*) FROM " + TABLE + " u" + whereClause(username, role, classId, status, args);
         Long total = jdbcTemplate.queryForObject(sql, Long.class, args.toArray());
         return total == null ? 0L : total;
     }
 
-    public List<UserVO> page(String username, Long classId, long offset, long size) {
+    public List<UserVO> page(String username, String role, Long classId, Integer status, long offset, long size) {
         List<Object> args = new ArrayList<>();
         StringBuilder sql = new StringBuilder()
                 .append("SELECT u.id, u.username, u.real_name, u.role, u.class_id, u.status, u.create_time, u.update_time, ")
                 .append("c.class_name AS class_name ")
                 .append("FROM ").append(TABLE).append(" u ")
                 .append("LEFT JOIN `class` c ON c.id = u.class_id AND c.is_deleted = 0")
-                .append(whereClause(username, classId, args))
+                .append(whereClause(username, role, classId, status, args))
                 .append(" ORDER BY u.id DESC LIMIT ? OFFSET ?");
         args.add(size);
         args.add(offset);
@@ -145,11 +145,22 @@ public class UserRepository {
         return key == null ? null : key.longValue();
     }
 
-    /** 修改用户基础信息（不含密码） */
+    /** 修改用户基础信息（不含密码）。class_id 为 null 时显式 setNull，避免不同驱动对"无类型 null"的处理差异 */
     public int update(User user) {
-        return jdbcTemplate.update("UPDATE " + TABLE
+        return jdbcTemplate.update(
+                "UPDATE " + TABLE
                         + " SET real_name = ?, role = ?, class_id = ?, status = ? WHERE id = ? AND is_deleted = 0",
-                user.getRealName(), user.getRole(), user.getClassId(), user.getStatus(), user.getId());
+                ps -> {
+                    ps.setString(1, user.getRealName());
+                    ps.setString(2, user.getRole());
+                    if (user.getClassId() == null) {
+                        ps.setNull(3, Types.BIGINT);
+                    } else {
+                        ps.setLong(3, user.getClassId());
+                    }
+                    ps.setInt(4, user.getStatus() == null ? 1 : user.getStatus());
+                    ps.setLong(5, user.getId());
+                });
     }
 
     public int updatePassword(Long id, String encodedPassword) {
@@ -162,15 +173,23 @@ public class UserRepository {
         return jdbcTemplate.update("UPDATE " + TABLE + " SET is_deleted = 1 WHERE id = ? AND is_deleted = 0", id);
     }
 
-    private String whereClause(String username, Long classId, List<Object> args) {
+    private String whereClause(String username, String role, Long classId, Integer status, List<Object> args) {
         StringBuilder sb = new StringBuilder(" WHERE u.is_deleted = 0");
         if (username != null && !username.isBlank()) {
             sb.append(" AND u.username LIKE ?");
             args.add("%" + username.trim() + "%");
         }
+        if (role != null && !role.isBlank()) {
+            sb.append(" AND u.role = ?");
+            args.add(role.trim());
+        }
         if (classId != null) {
             sb.append(" AND u.class_id = ?");
             args.add(classId);
+        }
+        if (status != null) {
+            sb.append(" AND u.status = ?");
+            args.add(status);
         }
         return sb.toString();
     }

@@ -14,6 +14,7 @@ import com.util.demo2.user.vo.UserVO;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Objects;
@@ -64,13 +65,21 @@ public class UserService {
     }
 
     /** 分页查询（管理员） */
-    public PageResult<UserVO> page(long current, long size, String username, Long classId) {
+    public PageResult<UserVO> page(long current, long size, String username, String role, Long classId, Integer status) {
         long safeCurrent = current < 1 ? 1 : current;
         long safeSize = size < 1 ? 10 : Math.min(size, PAGE_SIZE_MAX);
-        long total = userRepository.count(username, classId);
+        // 过滤条件先校验再查库：传了非法值直接 400，避免前端看到"查得到 0 条"却不知道为什么
+        String safeRole = trimToNull(role);
+        if (safeRole != null && !ROLES.contains(safeRole)) {
+            throw new BusinessException("角色只能是 student / teacher / admin");
+        }
+        if (status != null && status != 0 && status != 1) {
+            throw new BusinessException("状态只能是 0（禁用）或 1（启用）");
+        }
+        long total = userRepository.count(username, safeRole, classId, status);
         List<UserVO> records = total == 0
                 ? List.of()
-                : userRepository.page(username, classId, (safeCurrent - 1) * safeSize, safeSize);
+                : userRepository.page(username, safeRole, classId, status, (safeCurrent - 1) * safeSize, safeSize);
         return PageResult.of(records, total, safeCurrent, safeSize);
     }
 
@@ -87,6 +96,7 @@ public class UserService {
     }
 
     /** 新增用户（管理员），密码 BCrypt 加密后入库，返回新用户 id */
+    @Transactional(rollbackFor = Exception.class)
     public Long create(UserSaveRequest request) {
         String username = trimToNull(request.getUsername());
         if (username == null) {
@@ -106,6 +116,9 @@ public class UserService {
             throw new BusinessException("真实姓名长度不能超过 50");
         }
         String role = validateRole(request.getRole());
+        // 说明：classId 对 student 是"推荐必填"而不是"强制必填"——班级模块（/api/class）还没合入时，
+        // 管理员需要先把学生建出来再分班，强制要求会卡住联调（api-test.ps1 也是先建学生、后补班级）。
+        // 前端在"新增学生"表单里应当让管理员选班级，后端只校验"传了就必须真实存在"。
         if (request.getClassId() != null && !userRepository.existsClass(request.getClassId())) {
             throw new BusinessException("班级不存在：classId = " + request.getClassId());
         }
@@ -121,7 +134,8 @@ public class UserService {
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setRealName(realName);
         user.setRole(role);
-        user.setClassId(request.getClassId());
+        // 教师/管理员不挂班级：班主任关系由 class.teacher_id 表示，避免两处数据打架
+        user.setClassId(LoginUser.ROLE_STUDENT.equals(role) ? request.getClassId() : null);
         user.setStatus(request.getStatus() == null ? 1 : request.getStatus());
         try {
             return userRepository.insert(user);
@@ -135,7 +149,14 @@ public class UserService {
      * 修改用户。
      * 管理员：可改姓名、角色、班级、状态，可重置密码。
      * 其他角色：只能改自己的姓名和密码，且明确拒绝修改角色/状态/班级的请求（防止提权）。
+     * <p>
+     * 两个容易踩的坑（都有单测盯着）：
+     * <ol>
+     *   <li>新密码必须在<b>写库之前</b>校验完，否则会出现"接口返回 400 密码太短、但姓名/角色已经被改掉"的脏数据；</li>
+     *   <li>方法加事务，"改资料"和"改密码"两条 UPDATE 要么都成功，要么都回滚。</li>
+     * </ol>
      */
+    @Transactional(rollbackFor = Exception.class)
     public void update(Long id, UserSaveRequest request) {
         User exist = userRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("用户不存在或已被删除"));
@@ -147,6 +168,14 @@ public class UserService {
         boolean self = Objects.equals(current.getId(), id);
         if (!admin && !self) {
             throw new BusinessException(Result.CODE_FORBIDDEN, "只能修改自己的信息");
+        }
+
+        // 登录账号不允许修改：它是登录凭据，改了会让日志、成果提交记录里的引用对不上。
+        // 前端编辑表单会原样回填 username，所以只有"确实传了不同的账号"才报错，不做静默忽略
+        // （静默忽略会让用户以为改成功了，是最难查的一类问题）。
+        String newUsername = trimToNull(request.getUsername());
+        if (newUsername != null && !newUsername.equals(exist.getUsername())) {
+            throw new BusinessException("登录账号不允许修改，如确需更换请新增账号后删除旧账号");
         }
 
         String role = exist.getRole();
@@ -198,6 +227,23 @@ public class UserService {
             throw new BusinessException("真实姓名长度不能超过 50");
         }
 
+        // 新密码：先校验、先加密，再动数据库。
+        // 原来是在 userRepository.update() 之后才校验，密码过短时接口返回 400，
+        // 但姓名/角色/班级/状态其实已经写进库里了（JdbcTemplate 自动提交，方法没有事务）——属于"报了错却改了数据"。
+        String encodedPassword = null;
+        if (request.getPassword() != null && !request.getPassword().isBlank()) {
+            if (request.getPassword().length() < PASSWORD_MIN_LENGTH) {
+                throw new BusinessException("密码不能少于 " + PASSWORD_MIN_LENGTH + " 位");
+            }
+            encodedPassword = passwordEncoder.encode(request.getPassword());
+        }
+
+        // 角色与班级必须一致的一点：教师/管理员不挂班级（带班关系由 class.teacher_id 表示），
+        // 否则同一件事会有两份数据、迟早打架。学生允许暂时不带班级（等班级模块建好后再分班）。
+        if (!LoginUser.ROLE_STUDENT.equals(role)) {
+            classId = null;
+        }
+
         User update = new User();
         update.setId(id);
         update.setRealName(realName);
@@ -207,15 +253,13 @@ public class UserService {
         userRepository.update(update);
 
         // 密码留空表示不改密码
-        if (request.getPassword() != null && !request.getPassword().isBlank()) {
-            if (request.getPassword().length() < PASSWORD_MIN_LENGTH) {
-                throw new BusinessException("密码不能少于 " + PASSWORD_MIN_LENGTH + " 位");
-            }
-            userRepository.updatePassword(id, passwordEncoder.encode(request.getPassword()));
+        if (encodedPassword != null) {
+            userRepository.updatePassword(id, encodedPassword);
         }
     }
 
     /** 逻辑删除（管理员）：不能删自己，也不能删掉最后一个管理员 */
+    @Transactional(rollbackFor = Exception.class)
     public void delete(Long id) {
         User exist = userRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("用户不存在或已被删除"));

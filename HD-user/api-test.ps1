@@ -53,7 +53,39 @@ function Invoke-Api {
         # 用 UTF-8 字节发送，避免 Windows 下中文变成乱码
         $request['Body'] = [System.Text.Encoding]::UTF8.GetBytes($json)
     }
-    Invoke-RestMethod @request
+    return Invoke-ApiRaw @request
+}
+
+<#
+  响应统一按 UTF-8 解码后再转成对象。
+  原因：后端返回的是标准 UTF-8 字节（Content-Type: application/json，JSON 本身规定就是 UTF-8，
+  Spring 6+ 不再往响应头里塞 charset），浏览器/axios/Vue 客户端都没问题；
+  但 Windows PowerShell 5.1 的 Invoke-RestMethod 在响应头没有 charset 时会按 ISO-8859-1 解码，
+  中文就变成「è´¦å·æè¯¯」这种乱码，导致"提示是否中文正确"的断言误报失败。
+  这里自己取原始字节按 UTF-8 解码，PowerShell 5.1 和 PowerShell 7 下都正确。
+#>
+function Invoke-ApiRaw {
+    param(
+        [string]$Method,
+        [string]$Uri,
+        [hashtable]$Headers,
+        [string]$ContentType,
+        [int]$TimeoutSec = 15,
+        $Body
+    )
+    $request = @{
+        Method      = $Method
+        Uri         = $Uri
+        Headers     = $Headers
+        TimeoutSec  = $TimeoutSec
+        UseBasicParsing = $true
+    }
+    if ($ContentType) { $request['ContentType'] = $ContentType }
+    if ($null -ne $Body) { $request['Body'] = $Body }
+    $response = Invoke-WebRequest @request
+    $text = [System.Text.Encoding]::UTF8.GetString($response.RawContentStream.ToArray())
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+    return $text | ConvertFrom-Json
 }
 
 Write-Host "目标服务：$BaseUrl" -ForegroundColor Yellow
@@ -76,7 +108,7 @@ try {
     Assert-Equal '不带 token 访问分页 -> 401' 401 $r.code
     $r = Invoke-Api -Method GET -Path '/api/user/page' -Token 'wrong.token.value'
     Assert-Equal '伪造 token -> 401' 401 $r.code
-    $r = Invoke-RestMethod -Method GET -Uri "$BaseUrl/api/user/page?current=1&size=1" -Headers @{ Authorization = "Bearer $adminToken" } -TimeoutSec 15
+    $r = Invoke-ApiRaw -Method GET -Uri "$BaseUrl/api/user/page?current=1&size=1" -Headers @{ Authorization = "Bearer $adminToken" } -TimeoutSec 15
     Assert-Equal 'Authorization: Bearer 方式同样可用' 200 $r.code
 
     Write-Step '3. 登录失败分支'

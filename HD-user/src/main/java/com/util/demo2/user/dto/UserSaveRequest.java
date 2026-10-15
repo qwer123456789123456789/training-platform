@@ -3,8 +3,10 @@ package com.util.demo2.user.dto;
 /**
  * 新增/修改用户请求体，两种场景复用：
  *
- * 新增：username、password、realName、role 必填，classId/status 可选（status 默认 1）
- * 修改：password 留空表示不改密码；username 不允许修改（传了也会被忽略）
+ * 新增：username、password、realName、role 必填；classId 建议填（学生要分班），传了就必须真实存在；
+ *      role=teacher/admin 时 classId 会被忽略（强制写 NULL，教师带班关系由 class.teacher_id 表示）；
+ *      status 可选，默认 1（启用）。
+ * 修改：password 留空/不传表示不改密码；username 不允许修改（传了不同的值直接报 400，不静默忽略）。
  *
  * 校验逻辑写在 UserService 里，因为新增和修改的必填项不一样，
  * 用注解无法区分场景（注解只能一刀切）。
